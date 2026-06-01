@@ -1,0 +1,82 @@
+# Default Configuration for IV Surface Reconstruction
+# =====================================================
+
+# Data configuration
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  train_file: "data/processed/train.csv"
+  val_file: "data/processed/val.csv"
+  test_file: "data/processed/test.csv"
+  
+  # Train/val/test split ratios (must sum to 1.0)
+  split:
+    train: 0.70
+    val: 0.15
+    test: 0.15
+  
+  # Random seed for reproducibility
+  random_seed: 42
+  
+  # Use temporal split (True) or random split (False)
+  temporal_split: true
+
+# Model configuration
+model:
+  name: "pinn"
+  
+  # Architecture
+  input_dim: 45  # Option features (X0-X41) + strike + option_type + expiry
+  hidden_dims: [64, 64]  # Hidden layer dimensions
+  output_dim: 1  # Predicted IV
+  
+  # Activation functions
+  hidden_activation: "relu"
+  output_activation: "softplus"  # Softplus enforces IV > 0
+  
+  # Physics constraints
+  physics_penalty_weight: 0.1
+  iv_min: 0.0
+  iv_max: 3.0  # NIFTY50 typical range
+
+# Training configuration
+training:
+  # Optimization
+  optimizer: "adam"
+  learning_rate: 0.001
+  weight_decay: 1.0e-5
+  
+  # Training loop
+  epochs: 1000
+  batch_size: 32
+  validation_frequency: 10  # Validate every N epochs
+  
+  # Early stopping
+  use_early_stopping: true
+  early_stopping_patience: 50
+  early_stopping_metric: "val_mse"  # "val_mse" or "val_loss"
+  
+  # Checkpointing
+  save_checkpoint_frequency: 50  # Save every N epochs
+  best_model_path: "models/best_model.pt"
+  checkpoint_dir: "models/checkpoints"
+  
+  # Device
+  device: "cpu"  # "cuda" or "cpu"
+
+# Evaluation configuration
+evaluation:
+  metrics:
+    - "mse"
+    - "mae"
+    - "rmse"
+    - "r2"
+  
+  plot_results: true
+  plot_dir: "results/plots"
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  log_file: "logs/training.log"
+  log_freq: 10  # Log metrics every N batches
