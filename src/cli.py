@@ -5,6 +5,7 @@ import click
 from pathlib import Path
 
 from src.config import load_config
+from src.data.preprocess import prepare_processed_data
 from src.train.train_and_save import train_model
 
 
@@ -56,11 +57,39 @@ def train(config: str, device: str):
     
     try:
         history = train_model(cfg, save_best_model=True)
-        logger.info("✅ Training completed successfully!")
+        logger.info("Training completed successfully")
         logger.info(f"Best model saved to: {cfg.training.best_model_path}")
         return 0
     except Exception as e:
-        logger.error(f"❌ Training failed: {e}", exc_info=True)
+        logger.error(f"Training failed: {e}", exc_info=True)
+        return 1
+
+
+@cli.command()
+@click.option(
+    "--config",
+    type=click.Path(exists=True),
+    default="config/default.yaml",
+    help="Path to configuration YAML file"
+)
+def prepare_data(config: str):
+    """Prepare processed training CSV from raw parquet files."""
+    logger.info(f"Loading configuration from {config}")
+    cfg = load_config(config)
+    raw_path = getattr(cfg.data, "raw_train_file", None)
+    output_file = cfg.data.train_file
+    if not raw_path:
+        logger.error("No raw_train_file configured. Please update config/default.yaml")
+        return 1
+    if not Path(raw_path).exists():
+        logger.error(f"Raw training file not found: {raw_path}")
+        return 1
+    try:
+        prepare_processed_data(raw_train_file=raw_path, output_train_file=output_file)
+        logger.info(f"Processed training data saved to {output_file}")
+        return 0
+    except Exception as e:
+        logger.error(f"Failed to prepare data: {e}", exc_info=True)
         return 1
 
 
@@ -93,7 +122,7 @@ def evaluate(model: str, config: str, output: str):
     logger.info(f"Configuration: {config}")
     
     # TODO: Implement evaluation logic
-    logger.info("⚠️  Evaluation functionality coming soon")
+    logger.info("Evaluation functionality coming soon")
     
     return 0
 
@@ -127,7 +156,7 @@ def compare(config: str, model: str, output: str):
     logger.info(f"Loading PINN model from {model}")
     
     # TODO: Implement baseline comparisons
-    logger.info("⚠️  Baseline comparison functionality coming soon")
+    logger.info("Baseline comparison functionality coming soon")
     
     return 0
 

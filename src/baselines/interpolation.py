@@ -194,4 +194,4 @@ if __name__ == "__main__":
     spline_model = SplineInterpolation()
     spline_model.fit(forwards, strikes, market_ivs)
     
-    print("✅ Interpolation models initialized successfully")
+    print("Interpolation models initialized successfully")

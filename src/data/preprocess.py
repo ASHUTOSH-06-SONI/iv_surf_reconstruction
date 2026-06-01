@@ -2,12 +2,14 @@
 
 import logging
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
+
+from src.utils.reshape import reshape_wide_to_long
 
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,52 @@ def clean_iv_column(
     if removed > 0:
         logger.info(f"Removed {removed} IV outliers")
     return df
+
+
+def prepare_processed_data(
+    raw_train_file: str,
+    output_train_file: str,
+    feature_cols: Optional[List[str]] = None,
+    call_iv_pattern: str = "call_iv_",
+    put_iv_pattern: str = "put_iv_",
+    strike_pattern: str = r'(\d+)'
+) -> pd.DataFrame:
+    """Prepare processed training data from raw parquet.
+
+    Args:
+        raw_train_file: Path to raw training parquet file.
+        output_train_file: Path to save processed long-format CSV.
+        feature_cols: Columns to keep as id_vars in reshape.
+        call_iv_pattern: Prefix for call IV columns.
+        put_iv_pattern: Prefix for put IV columns.
+        strike_pattern: Regex used to extract strike from column names.
+
+    Returns:
+        Processed DataFrame in long format.
+    """
+    raw_path = Path(raw_train_file)
+    if not raw_path.exists():
+        raise FileNotFoundError(f"Raw training file not found: {raw_train_file}")
+
+    df = pd.read_parquet(raw_path)
+    if feature_cols is None:
+        feature_cols = ["timestamp", "underlying", "expiry"] + [f"X{i}" for i in range(42)]
+
+    long_df = reshape_wide_to_long(
+        df,
+        feature_cols=feature_cols,
+        call_iv_pattern=call_iv_pattern,
+        put_iv_pattern=put_iv_pattern,
+        strike_pattern=strike_pattern,
+    )
+    long_df = long_df.dropna(subset=["iv"])
+
+    output_path = Path(output_train_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    long_df.to_csv(output_path, index=False)
+    logger.info(f"Prepared processed training data at {output_train_file}")
+
+    return long_df
 
 
 def encode_categorical_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:

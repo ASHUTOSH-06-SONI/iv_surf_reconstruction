@@ -3,7 +3,10 @@
 
 # Data configuration
 data:
-  raw_dir: "data/raw"
+  raw_dir: "nk-iv-prediction"
+  raw_train_file: "nk-iv-prediction/train_data.parquet"
+  raw_test_file: "nk-iv-prediction/test_data.parquet"
+  raw_submission_file: "nk-iv-prediction/sample_submission.csv"
   processed_dir: "data/processed"
   train_file: "data/processed/train.csv"
   val_file: "data/processed/val.csv"

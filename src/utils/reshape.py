@@ -114,4 +114,4 @@ if __name__ == "__main__":
         input_file = sys.argv[1]
         output_file = sys.argv[2] if len(sys.argv) > 2 else "reshaped_data.csv"
         reshape_from_file(input_file, output_file)
-        print(f"✅ Reshaped data saved to {output_file}")
+        print(f"Reshaped data saved to {output_file}")

@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.preprocessing import StandardScaler
 
 from src.config import Config
+from src.data.preprocess import prepare_processed_data
 from src.models import PINNModel, physics_penalty
 
 
@@ -79,9 +80,17 @@ def load_data(config: Config) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor,
     """
     logger.info(f"Loading training data from {config.data.train_file}")
     
-    # Load training data
+    # Prepare processed dataset from raw parquet if the processed file is missing.
     if not Path(config.data.train_file).exists():
-        raise FileNotFoundError(f"Training data not found: {config.data.train_file}")
+        raw_path = getattr(config.data, "raw_train_file", None)
+        if raw_path and Path(raw_path).exists():
+            logger.info(f"Processed training file missing; preparing from raw parquet: {raw_path}")
+            prepare_processed_data(
+                raw_train_file=raw_path,
+                output_train_file=config.data.train_file
+            )
+        else:
+            raise FileNotFoundError(f"Training data not found: {config.data.train_file}")
     
     train_df = pd.read_csv(config.data.train_file)
     
