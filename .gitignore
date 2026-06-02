@@ -140,5 +140,8 @@ models/
 *.pth
 *.pkl
 
+# Local raw dataset folder (keep out of repo)
+nk-iv-prediction/
+
 # Submissions (old Kaggle artifacts)
 submissions/
