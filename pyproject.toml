@@ -36,6 +36,7 @@ dependencies = [
     "matplotlib>=3.5.0",
     "pyyaml>=6.0",
     "click>=8.0.0",
+    "pyarrow>=12.0.0",
 ]
 
 [project.optional-dependencies]

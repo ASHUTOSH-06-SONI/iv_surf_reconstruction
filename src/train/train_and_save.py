@@ -68,12 +68,42 @@ class EarlyStopping:
         return False
 
 
-def load_data(config: Config) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, 
+def get_device(device_name: str) -> torch.device:
+    """Resolve compute device name to a torch.device.
+
+    Args:
+        device_name: One of "cpu", "cuda", "mps", or "auto".
+
+    Returns:
+        Resolved torch.device.
+    """
+    if device_name == "auto":
+        if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            return torch.device("mps")
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        return torch.device("cpu")
+
+    if device_name == "mps":
+        if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            return torch.device("mps")
+        raise RuntimeError("Requested MPS device, but MPS is not available on this system.")
+
+    if device_name == "cuda":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        raise RuntimeError("Requested CUDA device, but CUDA is not available on this system.")
+
+    return torch.device(device_name)
+
+
+def load_data(config: Config, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, 
                                        torch.Tensor, torch.Tensor, StandardScaler]:
     """Load and preprocess data from CSV files.
     
     Args:
         config: Configuration object with data paths and split ratios
+        device: Torch device on which tensors should be allocated
     
     Returns:
         Tuple of (X_train, y_train, X_val, y_val, X_test, y_test, scaler)
@@ -144,7 +174,6 @@ def load_data(config: Config) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor,
         test_idx = indices[int(n_samples * (config.data.split.train + config.data.split.val)):]
     
     # Convert to tensors
-    device = torch.device(config.training.device)
     X_train = torch.tensor(X_scaled[train_idx], dtype=torch.float32).to(device)
     y_train = torch.tensor(y_norm[train_idx], dtype=torch.float32).to(device).unsqueeze(1)
     
@@ -174,11 +203,11 @@ def train_model(config: Config, save_best_model: bool = True) -> dict:
     logger.info("=" * 80)
     
     # Setup device
-    device = torch.device(config.training.device)
+    device = get_device(config.training.device)
     logger.info(f"Using device: {device}")
     
     # Load data
-    X_train, y_train, X_val, y_val, X_test, y_test, scaler, y_mean, y_std = load_data(config)
+    X_train, y_train, X_val, y_val, X_test, y_test, scaler, y_mean, y_std = load_data(config, device)
     
     # Create data loaders
     train_dataset = TensorDataset(X_train, y_train)

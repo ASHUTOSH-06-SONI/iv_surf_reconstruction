@@ -32,9 +32,9 @@ def cli():
 )
 @click.option(
     "--device",
-    type=click.Choice(["cpu", "cuda"]),
+    type=click.Choice(["cpu", "cuda", "mps", "auto"]),
     default=None,
-    help="Compute device (cpu or cuda)"
+    help="Compute device (cpu, cuda, mps, or auto)"
 )
 def train(config: str, device: str):
     """Train PINN model with physics constraints.
