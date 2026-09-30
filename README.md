@@ -294,7 +294,7 @@ If you use this code in research, please cite:
 ```bibtex
 @software{iv_surface_pinn_2024,
   title={IV Surface Reconstruction using Physics-Informed Neural Networks},
-  author={Soni, Santosh},
+  author={Soni, Ashutosh},
   year={2024},
   url={https://github.com/yourusername/iv_surf_reconstruction}
 }
@@ -304,21 +304,7 @@ If you use this code in research, please cite:
 
 MIT License - See LICENSE file for details
 
-## Contributing
 
-Contributions are welcome! Please:
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit changes (`git commit -m 'Add amazing feature'`)
-4. Push to branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## Contact
-
-For questions or collaborations, reach out to [your contact info]
-
----
-
-**Last Updated:** June 2, 2024  
+**Last Updated:** September 30, 2026
 **Status:** Active Research (Alpha)
 
