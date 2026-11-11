@@ -1,337 +1,224 @@
-# IV Surface Reconstruction: Physics-Informed Neural Networks vs. Classical Methods
+# Implied Volatility Surface Reconstruction
 
-A quantitative finance research project for reconstructing implied volatility (IV) surfaces from sparse option-chain observations. This repository compares physics-informed neural networks (PINNs) with classical quantitative finance methods (SABR model, interpolation) for reconstructing complete IV surfaces.
+Research code for reconstructing missing implied-volatility (IV) quotes from
+partially observed option surfaces. The current benchmark uses historical
+NIFTY 50 option data from a 2025 competition. The research goal is to compare
+financial and data-driven reconstruction methods, then test how well they
+generalize across more recent periods and other asset classes.
 
-## Project Overview
+> **Current status:** the first retrospective, masked-quote benchmark is
+> implemented. Linear interpolation and a neural surface model are promising
+> on this dataset, but the result is preliminary and does not establish
+> cross-asset generalization or arbitrage-free behavior.
 
-### Problem Statement
+## Research question
 
-Implied volatility surfaces are critical for option pricing and risk management. However, in practice, we often observe sparse IV quotes at limited strikes and expirations. The goal is to reconstruct the complete IV surface from these observations using:
+Given a single option surface with some observed call and put IV quotes, how
+accurately can a method reconstruct the hidden quotes on that same surface?
 
-1. **Physics-Informed Neural Networks (PINN)** — Leverages financial constraints directly in the model
-2. **Classical Methods** — SABR stochastic volatility model, spline/interpolation baselines
+The primary evaluation is **masked-quote completion**:
 
-### Why Physics-Informed?
+1. Start with a complete historical surface.
+2. Keep a subset of quotes visible as model inputs.
+3. Hide the remaining quotes.
+4. Predict only the hidden quotes and compare with their known values.
 
-Traditional neural networks can learn to predict IVs, but without financial constraints they may:
-- Predict negative volatilities (unphysical)
-- Produce unstable, spiky surfaces (violates market smoothness)
-- Fail to generalize beyond training data
+This is different from ordinary row-wise IV prediction: reconstruction methods
+must use the observed quotes from the surface being completed.
 
-PINNs address this by embedding financial constraints:
+## Current dataset
 
-```
-Loss = MSE(pred, target) + λ × Physics_Penalty(pred)
+The local competition dataset is stored under `data/nk-iv-prediction/` and is
+ignored by Git.
 
-Physics_Penalty = E[max(-σ, 0)²] + E[max(σ - σ_max, 0)²]
-```
+| File | Contents |
+|---|---|
+| `train_data.parquet` | 178,340 historical rows; complete call/put IV surfaces; 42 anonymized market features |
+| `test_data.parquet` | 12,065 partially observed surfaces; masked timestamps are unique IDs; expiry is omitted |
+| `sample_submission.csv` | Competition-format output template |
 
-**Output Activation:** Softplus (ln(1 + e^x)) ensures σ > 0  
-**Bounds:** σ ∈ [0, 3.0] for NIFTY50 options  
-**Architecture:** 4-layer feedforward network with ReLU hidden activations
+The training period runs from **April 22 to May 7, 2025 (UTC)** and contains
+three weekly expiries: April 24, April 30, and May 8. The training surface has
+52 IV columns: 26 calls and 26 puts.
 
-## Installation
+The provided test surface has about 60% of its IV entries missing. It has a
+different strike grid from training: 42 strikes overlap, while 10 outer test
+strikes have no training labels. Offline metrics therefore cover only the
+shared 42 strikes. The masked test timestamps are IDs, not chronological time.
 
-### Requirements
-- Python 3.9+
-- PyTorch 2.0+
-- NumPy, Pandas, Scikit-learn, Matplotlib
+The data also has 42 anonymous `X0`–`X41` features. Their meanings and units
+are unavailable. Some are sparse or have heavy tails, and feature distributions
+can differ between train and test. Do not assume that an extreme value is
+erroneous solely because it is large.
 
-### Setup
+## Current masked-quote benchmark
 
-```bash
-# Clone the repository
-git clone <repo-url>
-cd iv_surf_reconstruction
-
-# Install in development mode
-pip install -e .
-
-# Or install dependencies directly
-pip install -r requirements.txt
-```
-
-## Project Structure
-
-```
-iv_surf_reconstruction/
-├── config/
-│   └── default.yaml          # Configuration file (paths, hyperparameters)
-├── src/
-│   ├── __init__.py
-│   ├── config.py             # Config loader
-│   ├── cli.py                # Command-line interface
-│   ├── models/
-│   │   ├── pinn_model.py     # PINN architecture
-│   ├── train/
-│   │   └── train_and_save.py # Training script with early stopping
-│   ├── data/
-│   │   └── preprocess.py     # Data preprocessing pipeline
-│   ├── utils/
-│   │   └── reshape.py        # Data reshaping (wide → long format)
-│   ├── evaluate/
-│   │   └── accuracy.py       # Evaluation metrics
-│   └── baselines/
-│       ├── sabr.py           # SABR stochastic volatility model
-│       └── interpolation.py  # Classical interpolation methods
-├── tests/
-│   ├── test_config.py
-│   ├── test_model.py
-│   ├── test_preprocessing.py
-│   └── conftest.py
-├── data/
-│   ├── raw/                  # Raw option data
-│   └── processed/            # Preprocessed data (CSV)
-├── models/                   # Trained model checkpoints
-├── results/                  # Evaluation results, plots
-├── pyproject.toml            # Project configuration
-└── README.md
-```
-
-## Quick Start
-
-### 1. Prepare Your Data
-
-Your data should be in **long format** (one row per option observation):
-
-```csv
-timestamp,underlying,strike_price,option_type,expiry,iv,X0,X1,...,X41
-2024-01-01 10:00:00,100,100,call,2024-02,0.25,1.2,0.5,...
-2024-01-01 10:00:00,100,110,call,2024-02,0.30,1.2,0.5,...
-```
-
-Save preprocessed data to `data/processed/train.csv`.
-
-### 2. Train PINN Model
+Run from the repository root:
 
 ```bash
-# Train with default config
-pinn-train --config config/default.yaml
-
-# Train on GPU
-pinn-train --config config/default.yaml --device cuda
+python -m src.evaluate.masked_quote_benchmark 2>&1 | tee results/masked_quote_benchmark.log
 ```
 
-This will:
-- Load and preprocess data
-- Initialize PINN with physics constraints
-- Train for 1000 epochs with validation
-- Save best model to `models/best_model.pt`
-- Log metrics every 50 epochs
+Default run settings are 12,000 sampled training surfaces, 500 validation
+surfaces, 500 later holdout surfaces, 40 epochs for each neural model, and a
+fixed random seed of 42. The visible call/put quote counts are sampled to
+resemble those in the competition test data; the positions of visible strikes
+are randomly selected.
 
-### 3. Evaluate Model
+Methods compared:
+
+- **Per-surface median:** simple reference baseline using only that surface’s
+  observed quotes.
+- **Linear interpolation:** interpolates within call and put smiles separately.
+- **SABR:** fits a SABR smile to observed quotes on each surface, with beta fixed.
+- **Surface MLP:** unconstrained neural surface-completion model.
+- **PINN:** the repository `PINNModel` used as a surface-completion network,
+  with Softplus output and an IV-range physics penalty.
+
+The benchmark PINN and MLP receive visible IV values, an observation mask,
+log-moneyness, and expiry information; they do **not** currently use the
+anonymous `X0`–`X41` features. They output a vector of IVs for the surface. The
+neural models are trained on sampled surfaces from the earlier training period
+and evaluated on later timestamps. In this experiment, “physics-informed”
+means positive outputs and a soft penalty for predictions outside `[0, 3]`;
+the benchmark does not enforce a pricing PDE, smoothness, or static
+arbitrage-free constraints.
+
+The separate `src/train/train_and_save.py` pipeline is a standard
+feature-to-single-IV predictor with timestamp-grouped splitting and configurable
+feature scaling. It is not the masked-surface model used for the results below.
+
+### Results currently recorded
+
+Metrics are decimal IV units; lower MAE/RMSE is better. These are from the default 500-surface validation and holdout run in
+`results/masked_quote_benchmark.csv`.
+
+| Split | Method | Hidden quotes | MAE | RMSE | R² |
+|---|---|---:|---:|---:|---:|
+| Validation | Surface median | 12,517 | 0.0671 | 0.0828 | -0.196 |
+| Validation | Linear interpolation | 12,517 | **0.0109** | 0.0210 | 0.923 |
+| Validation | SABR | 12,517 | 0.0514 | 0.0627 | 0.313 |
+| Validation | Surface MLP | 12,517 | 0.0143 | **0.0177** | 0.945 |
+| Validation | PINN | 12,517 | 0.0144 | 0.0179 | 0.944 |
+| Holdout | Surface median | 12,699 | 0.1020 | 0.1256 | -0.164 |
+| Holdout | Linear interpolation | 12,699 | 0.0182 | 0.0354 | 0.907 |
+| Holdout | SABR | 12,699 | 0.0905 | 0.1111 | 0.089 |
+| Holdout | Surface MLP | 12,699 | 0.0153 | 0.0197 | 0.971 |
+| Holdout | PINN | 12,699 | **0.0152** | **0.0191** | **0.973** |
+
+On this sampled holdout, the PINN and MLP beat the classical methods on RMSE;
+linear interpolation has slightly lower validation MAE. This is one
+retrospective dataset and one primary mask seed, so treat the ranking as
+preliminary. The competition test set has no local ground truth available, so
+these offline scores do not measure error on its hidden quotes.
+
+Outputs:
+
+- `results/masked_quote_benchmark.csv` — validation and holdout metrics
+- `results/masked_quote_reconstruction.png` — observed, hidden, and predicted
+  call/put IVs for an example surface
+- `results/masked_quote_benchmark.log` — terminal output, if using the command
+  above
+
+To adjust run size, epochs, or seed:
 
 ```bash
-pinn-evaluate --model models/best_model.pt --output results/evaluation.txt
+python -m src.evaluate.masked_quote_benchmark \
+  --train-rows 12000 \
+  --evaluation-rows 500 \
+  --epochs 40 \
+  --seed 42 \
+  --output results/masked_quote_benchmark.csv
 ```
 
-### 4. Compare with Baselines
+## Feature-scaling experiment
 
-```bash
-pinn-compare --model models/best_model.pt --output results/comparison.csv
-```
-
-## Configuration
-
-Edit `config/default.yaml` to customize:
-
-```yaml
-# Data paths and splits
-data:
-  train_file: "data/processed/train.csv"
-  split: {train: 0.70, val: 0.15, test: 0.15}
-  temporal_split: true  # Use temporal ordering, not random split
-
-# Model architecture
-model:
-  input_dim: 45  # Option features + market factors
-  hidden_dims: [64, 64]
-  output_activation: "softplus"  # Ensures IV > 0
-  physics_penalty_weight: 0.1
-
-# Training
-training:
-  epochs: 1000
-  batch_size: 32
-  learning_rate: 0.001
-  use_early_stopping: true
-  early_stopping_patience: 50
-  device: "cpu"  # or "cuda"
-```
-
-## Model Details
-
-### PINN Architecture
-
-```
-Input (45 features) → Linear(45, 64) → ReLU
-                    → Linear(64, 64) → ReLU
-                    → Linear(64, 1) → Softplus
-Output: IV ∈ (0, ∞)
-```
-
-**Physics Constraints:**
-- **Softplus activation** ensures σ > 0 (non-negativity)
-- **Soft penalty** discourages σ > 3.0 (upper bound)
-- **MSE loss** on IV targets in their original decimal units
-
-### Loss Function
-
-```
-L_total = L_MSE + λ × L_physics
-
-where:
-  L_MSE = Mean squared error between predictions and targets
-  L_physics = E[max(-σ, 0)²] + E[max(σ - 3.0, 0)²]
-  λ = Physics penalty weight (default: 0.1)
-```
-
-### Baseline Methods
-
-1. **SABR Model** (`src/baselines/sabr.py`)
-   - Stochastic alpha-beta-rho volatility model
-   - Hagan's closed-form approximation
-   - Calibrated to market IV data
-
-2. **Linear/Spline Interpolation** (`src/baselines/interpolation.py`)
-   - Spatial interpolation on observed IV points
-   - RectBivariateSpline for smooth surfaces
-   - Kernel smoothing via local volatility
-
-## Training Tips
-
-### Data Preparation
-
-1. **Scale features** using a RobustScaler fitted on training data only
-2. **Keep IV targets** in original decimal units
-3. **Exclude invalid IVs** outside the configured [0, 3] bounds; do not winsorize or median-impute them
-4. **Split by timestamp** so quotes from one timestamp remain in one partition
-
-Compare supported feature-scaling strategies on a chronological training holdout:
+`src.evaluate.scaling_comparison` compares input scalers for ordinary IV
+prediction from market features. It is an auxiliary diagnostic, **not** the
+masked-quote reconstruction benchmark, and its metrics should not be used to
+choose the reconstruction model.
 
 ```bash
 python -m src.evaluate.scaling_comparison --config config/default.yaml
 ```
 
-The comparison tests the RobustScaler baseline, signed-log plus StandardScaler,
-and sparse signed-log scaling with nonzero indicators for `X41` and `X23`.
-It also reports a training-median predictor as a sanity-check baseline. By default,
-the quick comparison samples 1,500 training timestamps and 400 timestamps from
-each validation/test period; increase `--train-rows` and `--eval-rows` for a
-larger run. Results are written to `results/feature_scaling_comparison.csv`.
+Available feature scaling options for the training data pipeline:
 
-For masked-quote reconstruction, run:
+- `robust` — RobustScaler, the configured default.
+- `signed_log_standard` — signed `log1p` on `X` fields followed by
+  StandardScaler.
+- `sparse_signed_log` — signed-log transforms with nonzero indicators for
+  `X41` and `X23`.
+
+The scaler is fitted on training data only. IV targets remain in decimal units.
+The ordinary trainer excludes IV values outside configured bounds `[0, 3]`;
+it does not winsorize or median-impute them.
+
+## Project layout
+
+```text
+config/default.yaml                Data paths, splits, model and training settings
+data/nk-iv-prediction/             Local, Git-ignored competition data
+src/baselines/interpolation.py     Interpolation baselines
+src/baselines/sabr.py              SABR model implementation
+src/data/feature_scaling.py        Configurable market-feature transformations
+src/data/preprocess.py             Wide-to-long preparation and preprocessing
+src/evaluate/masked_quote_benchmark.py
+                                   Masked-quote validation and result plotting
+src/evaluate/scaling_comparison.py Feature-scaling diagnostic experiment
+src/models/pinn_model.py           PINN architecture and IV physics penalty
+src/train/train_and_save.py        Standard feature-to-IV training pipeline
+tests/                             Unit tests
+results/                           Recorded benchmark CSVs, logs, and plots
+```
+
+## Setup and tests
+
+Python 3.9 or newer is required. Install project dependencies with:
 
 ```bash
-python -m src.evaluate.masked_quote_benchmark
+pip install -e .
 ```
 
-This compares a per-surface median, strike-wise linear interpolation, a calibrated
-SABR smile, an unconstrained surface MLP, and the repository PINN with its IV-range
-physics penalty. Masks are sampled to match
-the competition test set's visible call/put quote counts. Scores cover only the
-42 strikes shared by train and test; the 10 test-only outer strikes have no
-historical labels here and are excluded from offline metrics. The command saves
-metrics to `results/masked_quote_benchmark.csv` and an example surface plot to
-`results/masked_quote_reconstruction.png`.
-
-### Hyperparameter Tuning
-
-```python
-# In config/default.yaml, adjust:
-model:
-  hidden_dims: [128, 128]  # Larger network
-  physics_penalty_weight: 0.5  # Stronger constraint
-
-training:
-  learning_rate: 0.0005  # Lower LR for stability
-  early_stopping_patience: 100
-```
-
-## Testing
-
-Run unit tests to verify the implementation:
+Run the test suite:
 
 ```bash
-pytest tests/ -v
-
-# Run specific test
-pytest tests/test_model.py -v
-
-# Coverage report
-pytest tests/ --cov=src --cov-report=html
+pytest -q
 ```
 
-**Test Coverage:**
-- Config loading and validation
-- PINN forward pass and backprop
-- Physics penalty computation
-- Data preprocessing pipeline
+## Important limitations and next steps
 
-## Research References
+1. **Validate robustness:** run several mask seeds and multiple chronological
+   holdout windows; report mean and variation, not only one score.
+2. **Test mask shapes:** compare random quote masks with contiguous strike gaps
+   and other realistic missingness patterns.
+3. **Strengthen baselines:** review SABR calibration and interpolation
+   behavior, including sparse and boundary cases.
+4. **Inspect financial quality:** add surface smoothness and static-arbitrage
+   diagnostics; prediction error alone does not establish a valid surface.
+5. **Add recent, diverse data:** obtain labeled option surfaces from multiple
+   asset classes and market regimes. Evaluate both within-asset and held-out
+   asset generalization. The current NIFTY 50 dataset cannot answer that
+   generalization question.
+6. **Resolve strike-grid extrapolation:** the 10 competition test-only strikes
+   are outside the training strike coverage and cannot be scored offline with
+   the current labels.
+7. **Complete production evaluation:** the legacy `pinn-evaluate` and
+   `pinn-compare` CLI commands are placeholders; the masked-quote benchmark is
+   the current end-to-end comparison path.
 
-- **PINN Framework:** Raissi et al. (2019) "Physics-informed neural networks: A deep learning framework for solving forward and inverse problems"
-- **SABR Model:** Hagan et al. (2002) "Managing Smile Risk"
-- **IV Surface Theory:** Rebonato (2004) "Volatility and Correlation"
+## References
 
-See `src/assets/` for included research papers:
-- `PINN.pdf` — General PINN methodology
-- `SABR_Model.pdf` — SABR stochastic volatility model  
-- `PIDL.pdf` — Physics-informed deep learning
-
-## Results & Benchmarks
-
-(Results will be added after training on benchmark datasets)
-
-### PINN Performance
-- **MSE on test set:** TBD
-- **IV prediction range:** [0.0, 3.0] (constrained)
-- **Surface smoothness:** Good (Softplus output)
-
-### Baseline Comparisons
-- **Linear Interpolation:** Fast, simple, but non-smooth
-- **SABR Model:** Theoretically sound, requires calibration
-- **PINN:** Best generalization, data-driven with physics
-
-## Future Work
-
-1. **Extended Baselines**
-   - Dupire local volatility model
-   - Neural volatility surface (unconstrained NN)
-   - Gaussian process interpolation
-
-2. **Advanced PINN Variants**
-   - Residual physics (enforce Black-Scholes PDE)
-   - Transfer learning from related IV surfaces
-   - Multi-asset correlation modeling
-
-3. **Evaluation Metrics**
-   - Surface smoothness measures
-   - Arbitrage-free tests
-   - Hedging performance comparison
-
-4. **Production Considerations**
-   - Real-time inference API
-   - Model serving (ONNX export)
-   - Retraining pipeline
-
-## Citation
-
-If you use this code in research, please cite:
-
-```bibtex
-@software{iv_surface_pinn_2024,
-  title={IV Surface Reconstruction using Physics-Informed Neural Networks},
-  author={Soni, Ashutosh},
-  year={2024},
-  url={https://github.com/yourusername/iv_surf_reconstruction}
-}
-```
+- Hagan et al. (2002), “Managing Smile Risk” — SABR implied-volatility
+  approximation.
+- Raissi et al. (2019), “Physics-informed neural networks: A deep learning
+  framework for solving forward and inverse problems.”
+- Brooks et al. (2017), “A Topological Approach to Scaling in Financial Data,”
+  [arXiv:1710.08860](https://arxiv.org/abs/1710.08860). This analyzes
+  self-similarity in ordered price series; it is not a feature-scaling method
+  for the anonymous `X` inputs.
 
 ## License
 
-MIT License - See LICENSE file for details
-
-
-**Last Updated:** September 30, 2026
-**Status:** Active Research (Alpha)
+The package metadata declares MIT. See the repository license file for the
+applicable terms.
