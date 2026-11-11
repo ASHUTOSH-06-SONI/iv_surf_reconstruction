@@ -135,13 +135,13 @@ Thumbs.db
 
 # Data and models (keep processed data, exclude raw and models)
 data/raw/
-models/
+/models/
 *.pt
 *.pth
 *.pkl
 
 # Local raw dataset folder (keep out of repo)
-nk-iv-prediction/
+data/nk-iv-prediction/
 
 # Submissions (old Kaggle artifacts)
 submissions/

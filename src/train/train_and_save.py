@@ -11,10 +11,9 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
-from sklearn.preprocessing import StandardScaler
-
 from src.config import Config
-from src.data.preprocess import prepare_processed_data
+from src.data.feature_scaling import MarketFeatureScaler
+from src.data.preprocess import clean_iv_column, prepare_processed_data
 from src.models import PINNModel, physics_penalty
 
 
@@ -97,8 +96,56 @@ def get_device(device_name: str) -> torch.device:
     return torch.device(device_name)
 
 
-def load_data(config: Config, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, 
-                                       torch.Tensor, torch.Tensor, StandardScaler]:
+def split_indices_by_timestamp(
+    timestamps: np.ndarray,
+    train_ratio: float,
+    val_ratio: float,
+    random_seed: int,
+    temporal: bool,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Split rows by unique timestamp so quotes from one surface stay together."""
+    if pd.isna(timestamps).any():
+        raise ValueError("Timestamps must not be missing when splitting the dataset.")
+    if len(timestamps) == 0:
+        raise ValueError("Cannot split a dataset with no timestamps.")
+    _, group_indices = np.unique(timestamps, return_inverse=True)
+    n_groups = int(group_indices.max()) + 1
+    n_train = int(n_groups * train_ratio)
+    n_val = int(n_groups * val_ratio)
+    if n_train == 0 or n_val == 0 or n_groups - n_train - n_val == 0:
+        raise ValueError("Train, validation, and test splits must each contain timestamps.")
+
+    group_order = np.arange(n_groups)
+    if not temporal:
+        np.random.default_rng(random_seed).shuffle(group_order)
+
+    train_groups = group_order[:n_train]
+    val_groups = group_order[n_train:n_train + n_val]
+    test_groups = group_order[n_train + n_val:]
+    group_splits = np.empty(n_groups, dtype=np.int8)
+    group_splits[train_groups] = 0
+    group_splits[val_groups] = 1
+    group_splits[test_groups] = 2
+    row_splits = group_splits[group_indices]
+    return (
+        np.flatnonzero(row_splits == 0),
+        np.flatnonzero(row_splits == 1),
+        np.flatnonzero(row_splits == 2),
+    )
+
+
+def load_data(
+    config: Config,
+    device: torch.device
+) -> Tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    MarketFeatureScaler,
+]:
     """Load and preprocess data from CSV files.
     
     Args:
@@ -124,68 +171,59 @@ def load_data(config: Config, device: torch.device) -> Tuple[torch.Tensor, torch
     
     train_df = pd.read_csv(config.data.train_file)
     
-    # Drop missing IV values
+    # Drop missing IV values and exclude only quotes outside configured physical bounds.
     initial_rows = len(train_df)
     train_df = train_df.dropna(subset=["iv"])
     logger.info(f"Dropped {initial_rows - len(train_df)} rows with missing IV values")
-    
-    # Filter IV outliers
-    train_df = train_df[
-        (train_df["iv"] >= config.model.iv_min) & 
-        (train_df["iv"] <= config.model.iv_max)
-    ]
+
+    train_df = clean_iv_column(
+        train_df,
+        target_col="iv",
+        outlier_bounds=(config.model.iv_min, config.model.iv_max),
+    )
     logger.info(f"Training set shape: {train_df.shape}")
     
     # Extract features and target
     feature_cols = ["underlying", "option_type", "strike_price"] + [f"X{i}" for i in range(42)]
-    X = train_df[feature_cols].values
+    if "timestamp" not in train_df:
+        raise ValueError("Processed training data must include timestamps for leakage-safe splitting.")
+    train_df = train_df.copy()
+    train_df["option_type"] = train_df["option_type"].map({"call": 0.0, "put": 1.0})
+    if train_df["option_type"].isna().any():
+        raise ValueError("Processed data contains an unknown option_type; expected 'call' or 'put'.")
+    X = train_df[feature_cols].to_numpy(dtype=np.float64)
+    if not np.isfinite(X).all():
+        raise ValueError("Processed feature values must all be finite.")
     y = train_df["iv"].values
     
-    # Standardize features
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-    
-    # Normalize target (normalize IV to mean=0, std=1)
-    y_mean = y.mean()
-    y_std = y.std()
-    y_norm = (y - y_mean) / y_std
-    
-    # Create train/val/test split
-    np.random.seed(config.data.random_seed)
-    n_samples = len(X_scaled)
-    
-    indices = np.arange(n_samples)
-    if config.data.temporal_split:
-        # Use first 70% for train, next 15% for val, last 15% for test
-        train_idx = indices[:int(n_samples * config.data.split.train)]
-        val_idx = indices[
-            int(n_samples * config.data.split.train):
-            int(n_samples * (config.data.split.train + config.data.split.val))
-        ]
-        test_idx = indices[int(n_samples * (config.data.split.train + config.data.split.val)):]
-    else:
-        # Random split
-        np.random.shuffle(indices)
-        train_idx = indices[:int(n_samples * config.data.split.train)]
-        val_idx = indices[
-            int(n_samples * config.data.split.train):
-            int(n_samples * (config.data.split.train + config.data.split.val))
-        ]
-        test_idx = indices[int(n_samples * (config.data.split.train + config.data.split.val)):]
+    train_idx, val_idx, test_idx = split_indices_by_timestamp(
+        train_df["timestamp"].to_numpy(),
+        train_ratio=config.data.split.train,
+        val_ratio=config.data.split.val,
+        random_seed=config.data.random_seed,
+        temporal=config.data.temporal_split,
+    )
+
+    # Fit feature transformations on training rows only. IV targets remain in decimal units.
+    scaling_method = getattr(config.data, "feature_scaling", "robust")
+    scaler = MarketFeatureScaler(feature_cols, method=scaling_method)
+    X_train = scaler.fit_transform(X[train_idx])
+    X_val = scaler.transform(X[val_idx])
+    X_test = scaler.transform(X[test_idx])
     
     # Convert to tensors
-    X_train = torch.tensor(X_scaled[train_idx], dtype=torch.float32).to(device)
-    y_train = torch.tensor(y_norm[train_idx], dtype=torch.float32).to(device).unsqueeze(1)
+    X_train = torch.tensor(X_train, dtype=torch.float32).to(device)
+    y_train = torch.tensor(y[train_idx], dtype=torch.float32).to(device).unsqueeze(1)
     
-    X_val = torch.tensor(X_scaled[val_idx], dtype=torch.float32).to(device)
-    y_val = torch.tensor(y_norm[val_idx], dtype=torch.float32).to(device).unsqueeze(1)
+    X_val = torch.tensor(X_val, dtype=torch.float32).to(device)
+    y_val = torch.tensor(y[val_idx], dtype=torch.float32).to(device).unsqueeze(1)
     
-    X_test = torch.tensor(X_scaled[test_idx], dtype=torch.float32).to(device)
-    y_test = torch.tensor(y_norm[test_idx], dtype=torch.float32).to(device).unsqueeze(1)
+    X_test = torch.tensor(X_test, dtype=torch.float32).to(device)
+    y_test = torch.tensor(y[test_idx], dtype=torch.float32).to(device).unsqueeze(1)
     
     logger.info(f"Train: {X_train.shape}, Val: {X_val.shape}, Test: {X_test.shape}")
     
-    return X_train, y_train, X_val, y_val, X_test, y_test, scaler, y_mean, y_std
+    return X_train, y_train, X_val, y_val, X_test, y_test, scaler
 
 
 def train_model(config: Config, save_best_model: bool = True) -> dict:
@@ -207,7 +245,7 @@ def train_model(config: Config, save_best_model: bool = True) -> dict:
     logger.info(f"Using device: {device}")
     
     # Load data
-    X_train, y_train, X_val, y_val, X_test, y_test, scaler, y_mean, y_std = load_data(config, device)
+    X_train, y_train, X_val, y_val, X_test, y_test, scaler = load_data(config, device)
     
     # Create data loaders
     train_dataset = TensorDataset(X_train, y_train)
@@ -222,7 +260,7 @@ def train_model(config: Config, save_best_model: bool = True) -> dict:
     
     # Initialize model
     model = PINNModel(
-        input_dim=config.model.input_dim,
+        input_dim=X_train.shape[1],
         hidden_dims=config.model.hidden_dims,
         output_dim=config.model.output_dim,
         hidden_activation=config.model.hidden_activation,
@@ -267,15 +305,12 @@ def train_model(config: Config, save_best_model: bool = True) -> dict:
             optimizer.zero_grad()
             
             # Forward pass
-            pred_normalized = model(batch_X)
-            
-            # Unnormalized predictions for physics penalty
-            pred_unnormalized = pred_normalized * y_std + y_mean
+            pred_iv = model(batch_X)
             
             # Loss computation
-            loss_supervised = criterion(pred_normalized, batch_y)
+            loss_supervised = criterion(pred_iv, batch_y)
             loss_physics = physics_penalty(
-                pred_unnormalized,
+                pred_iv,
                 iv_min=config.model.iv_min,
                 iv_max=config.model.iv_max
             )
@@ -299,12 +334,11 @@ def train_model(config: Config, save_best_model: bool = True) -> dict:
             
             with torch.no_grad():
                 for batch_X, batch_y in val_loader:
-                    pred_normalized = model(batch_X)
-                    pred_unnormalized = pred_normalized * y_std + y_mean
+                    pred_iv = model(batch_X)
                     
-                    loss_supervised = criterion(pred_normalized, batch_y)
+                    loss_supervised = criterion(pred_iv, batch_y)
                     loss_physics = physics_penalty(
-                        pred_unnormalized,
+                        pred_iv,
                         iv_min=config.model.iv_min,
                         iv_max=config.model.iv_max
                     )
@@ -351,14 +385,15 @@ def train_model(config: Config, save_best_model: bool = True) -> dict:
     logger.info(f"Training completed. Best model saved to {config.training.best_model_path}")
     logger.info("=" * 80)
     
-    # Save scaler and normalization parameters
+    # Save feature scaling metadata; targets and model outputs use IV decimal units.
     metadata_path = Path(config.training.best_model_path).parent / "metadata.pkl"
     with open(metadata_path, 'wb') as f:
         pickle.dump({
             "scaler": scaler,
-            "y_mean": y_mean,
-            "y_std": y_std,
-            "input_dim": config.model.input_dim
+            "input_dim": X_train.shape[1],
+            "feature_cols": scaler.feature_names_out,
+            "feature_scaling": scaler.method,
+            "target_units": "implied_volatility_decimal",
         }, f)
     logger.info(f"Metadata saved to {metadata_path}")
     

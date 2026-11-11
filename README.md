@@ -173,7 +173,7 @@ Output: IV ∈ (0, ∞)
 **Physics Constraints:**
 - **Softplus activation** ensures σ > 0 (non-negativity)
 - **Soft penalty** discourages σ > 3.0 (upper bound)
-- **MSE loss** on normalized targets for stable training
+- **MSE loss** on IV targets in their original decimal units
 
 ### Loss Function
 
@@ -202,10 +202,38 @@ where:
 
 ### Data Preparation
 
-1. **Normalize features** using StandardScaler (automatically done)
-2. **Normalize targets** (IV normalized to mean=0, std=1 during training)
-3. **Remove outliers** (IV < 0 or IV > 3 filtered automatically)
-4. **Temporal split** (recommended for time-series option data)
+1. **Scale features** using a RobustScaler fitted on training data only
+2. **Keep IV targets** in original decimal units
+3. **Exclude invalid IVs** outside the configured [0, 3] bounds; do not winsorize or median-impute them
+4. **Split by timestamp** so quotes from one timestamp remain in one partition
+
+Compare supported feature-scaling strategies on a chronological training holdout:
+
+```bash
+python -m src.evaluate.scaling_comparison --config config/default.yaml
+```
+
+The comparison tests the RobustScaler baseline, signed-log plus StandardScaler,
+and sparse signed-log scaling with nonzero indicators for `X41` and `X23`.
+It also reports a training-median predictor as a sanity-check baseline. By default,
+the quick comparison samples 1,500 training timestamps and 400 timestamps from
+each validation/test period; increase `--train-rows` and `--eval-rows` for a
+larger run. Results are written to `results/feature_scaling_comparison.csv`.
+
+For masked-quote reconstruction, run:
+
+```bash
+python -m src.evaluate.masked_quote_benchmark
+```
+
+This compares a per-surface median, strike-wise linear interpolation, a calibrated
+SABR smile, an unconstrained surface MLP, and the repository PINN with its IV-range
+physics penalty. Masks are sampled to match
+the competition test set's visible call/put quote counts. Scores cover only the
+42 strikes shared by train and test; the 10 test-only outer strikes have no
+historical labels here and are excluded from offline metrics. The command saves
+metrics to `results/masked_quote_benchmark.csv` and an example surface plot to
+`results/masked_quote_reconstruction.png`.
 
 ### Hyperparameter Tuning
 
@@ -307,4 +335,3 @@ MIT License - See LICENSE file for details
 
 **Last Updated:** September 30, 2026
 **Status:** Active Research (Alpha)
-

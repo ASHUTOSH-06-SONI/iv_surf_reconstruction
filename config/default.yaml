@@ -3,10 +3,10 @@
 
 # Data configuration
 data:
-  raw_dir: "nk-iv-prediction"
-  raw_train_file: "nk-iv-prediction/train_data.parquet"
-  raw_test_file: "nk-iv-prediction/test_data.parquet"
-  raw_submission_file: "nk-iv-prediction/sample_submission.csv"
+  raw_dir: "data/nk-iv-prediction"
+  raw_train_file: "data/nk-iv-prediction/train_data.parquet"
+  raw_test_file: "data/nk-iv-prediction/test_data.parquet"
+  raw_submission_file: "data/nk-iv-prediction/sample_submission.csv"
   processed_dir: "data/processed"
   train_file: "data/processed/train.csv"
   val_file: "data/processed/val.csv"
@@ -21,15 +21,17 @@ data:
   # Random seed for reproducibility
   random_seed: 42
   
-  # Use temporal split (True) or random split (False)
+  # Split by timestamp groups; temporal mode uses oldest timestamps for training.
   temporal_split: true
+  # Options: robust, signed_log_standard, sparse_signed_log
+  feature_scaling: "robust"
 
 # Model configuration
 model:
   name: "pinn"
   
   # Architecture
-  input_dim: 45  # Option features (X0-X41) + strike + option_type + expiry
+  input_dim: 45  # Underlying, option_type, strike, and X0-X41
   hidden_dims: [64, 64]  # Hidden layer dimensions
   output_dim: 1  # Predicted IV
   
@@ -37,7 +39,8 @@ model:
   hidden_activation: "relu"
   output_activation: "softplus"  # Softplus enforces IV > 0
   
-  # Physics constraints
+  # IV targets stay in decimal units; only values outside these bounds are excluded.
+  # The feature RobustScaler is fitted on training rows only.
   physics_penalty_weight: 0.1
   iv_min: 0.0
   iv_max: 3.0  # NIFTY50 typical range

@@ -6,7 +6,7 @@ from typing import Tuple, Optional, List
 
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.preprocessing import RobustScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
 
 from src.utils.reshape import reshape_wide_to_long
@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 def clean_iv_column(
     df: pd.DataFrame,
     target_col: str = "iv",
-    outlier_bounds: Tuple[float, float] = (-10000, 10000)
+    outlier_bounds: Tuple[float, float] = (0.0, 3.0)
 ) -> pd.DataFrame:
-    """Remove IV outliers outside reasonable bounds.
+    """Remove IV observations outside the configured physical bounds.
     
     Args:
         df: DataFrame with IV column
@@ -31,10 +31,7 @@ def clean_iv_column(
         DataFrame with outliers removed
     """
     initial_count = len(df)
-    df = df[
-        (df[target_col] > outlier_bounds[0]) & 
-        (df[target_col] < outlier_bounds[1])
-    ]
+    df = df[df[target_col].between(*outlier_bounds, inclusive="both")]
     removed = initial_count - len(df)
     if removed > 0:
         logger.info(f"Removed {removed} IV outliers")
@@ -101,7 +98,10 @@ def encode_categorical_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
     # Encode option_type: call=0, put=1
     if "option_type" in df.columns:
         df = df.copy()
-        df["option_type"] = df["option_type"].map({"call": 0, "put": 1})
+        if not pd.api.types.is_numeric_dtype(df["option_type"]):
+            df["option_type"] = df["option_type"].map({"call": 0, "put": 1})
+            if df["option_type"].isna().any():
+                raise ValueError("option_type must contain only 'call' and 'put'.")
     
     # Encode expiry as numeric
     if "expiry" in df.columns:
@@ -122,7 +122,7 @@ def preprocess_data(
     test_size: float = 0.2,
     random_state: int = 42,
     standardize: bool = True
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, StandardScaler, dict]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Optional[RobustScaler], dict]:
     """Full preprocessing pipeline for IV data.
     
     Steps:
@@ -130,7 +130,7 @@ def preprocess_data(
     2. Remove IV outliers
     3. Encode categorical features
     4. Split into train/test
-    5. Standardize features
+    5. Robust-scale features using training-set statistics, when requested
     
     Args:
         df: Input DataFrame
@@ -143,10 +143,6 @@ def preprocess_data(
     Returns:
         Tuple of (X_train, X_test, y_train, y_test, scaler, metadata_dict)
     """
-    if feature_cols is None:
-        feature_cols = ["underlying", "option_type", "strike_price", "expiry_encoded"] + \
-                      [f"X{i}" for i in range(42)]
-    
     df = df.copy()
     
     # Step 1: Drop missing IV values
@@ -161,6 +157,11 @@ def preprocess_data(
     df, encoders = encode_categorical_features(df)
     
     # Step 4: Extract features and target
+    if feature_cols is None:
+        feature_cols = ["underlying", "option_type", "strike_price"]
+        if "expiry_encoded" in df.columns:
+            feature_cols.append("expiry_encoded")
+        feature_cols.extend(f"X{i}" for i in range(42))
     X = df[feature_cols].values
     y = df[target_col].values
     
@@ -171,17 +172,19 @@ def preprocess_data(
         random_state=random_state
     )
     
-    # Step 5: Standardize
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
+    # Step 5: Scale using training data only; preserve IV targets in original units.
+    scaler = RobustScaler() if standardize else None
+    if scaler is None:
+        X_train_scaled = X_train
+        X_test_scaled = X_test
+    else:
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
     
     metadata = {
         "feature_cols": feature_cols,
         "target_col": target_col,
         "encoders": encoders,
-        "y_mean": y_train.mean(),
-        "y_std": y_train.std(),
         "n_features": len(feature_cols),
         "n_train": len(X_train),
         "n_test": len(X_test)

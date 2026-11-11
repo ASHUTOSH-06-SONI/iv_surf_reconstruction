@@ -3,6 +3,7 @@
 import pytest
 import pandas as pd
 import numpy as np
+from sklearn.preprocessing import RobustScaler
 from src.data.preprocess import clean_iv_column, encode_categorical_features, preprocess_data
 
 
@@ -13,11 +14,11 @@ def test_clean_iv_column(sample_dataframe):
     df.loc[0, "iv"] = -5000
     df.loc[1, "iv"] = 50000
     
-    cleaned = clean_iv_column(df, target_col="iv", outlier_bounds=(-10000, 10000))
+    cleaned = clean_iv_column(df, target_col="iv", outlier_bounds=(0, 3))
     
     assert len(cleaned) == len(df) - 2
-    assert cleaned["iv"].min() >= -10000
-    assert cleaned["iv"].max() <= 10000
+    assert cleaned["iv"].min() >= 0
+    assert cleaned["iv"].max() <= 3
 
 
 def test_clean_iv_column_no_outliers(sample_dataframe):
@@ -85,16 +86,16 @@ def test_preprocess_data_removes_missing_values():
     assert metadata["n_train"] + metadata["n_test"] == 2
 
 
-def test_preprocess_standardization(sample_dataframe):
-    """Test that features are properly standardized."""
+def test_preprocess_robust_scaling(sample_dataframe):
+    """Test that features are robust-scaled using training data."""
     X_train, X_test, _, _, scaler, _ = preprocess_data(sample_dataframe)
     
-    # Check that training data is standardized (mean ~0, std ~1)
-    train_mean = X_train.mean(axis=0)
-    train_std = X_train.std(axis=0)
+    assert isinstance(scaler, RobustScaler)
+    train_median = np.median(X_train, axis=0)
+    train_iqr = np.quantile(X_train, 0.75, axis=0) - np.quantile(X_train, 0.25, axis=0)
     
-    np.testing.assert_array_almost_equal(train_mean, np.zeros(X_train.shape[1]), decimal=1)
-    np.testing.assert_array_almost_equal(train_std, np.ones(X_train.shape[1]), decimal=1)
+    np.testing.assert_allclose(train_median, np.zeros(X_train.shape[1]), atol=0.15)
+    np.testing.assert_allclose(train_iqr, np.ones(X_train.shape[1]), atol=0.15)
 
 
 if __name__ == "__main__":
