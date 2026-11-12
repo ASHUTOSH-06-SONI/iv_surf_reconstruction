@@ -45,6 +45,21 @@ model:
   iv_min: 0.0
   iv_max: 3.0  # NIFTY50 typical range
 
+# Surface-level physics penalties (masked-quote benchmark / surface PINN).
+# physics_penalty_weight above is the IV-range weight; these add structure
+# across strikes. 0.0 = off, which reproduces the range-only behaviour.
+physics:
+  parity_weight: 0.0       # call IV(K) ~= put IV(K) at the same strike
+  curvature_weight: 0.0    # strike-curvature penalty on the completed surface
+  curvature_mode: "smooth" # "smooth" (|d2|^2) or "convex" (only negative d2)
+
+# Ablation study (python -m src.evaluate.physics_ablation).
+# Weights are starting points, not tuned values: sweep them on real data.
+ablation:
+  seeds: [42, 43, 44]
+  parity_weight: 1.0
+  curvature_weight: 1.0
+
 # Training configuration
 training:
   # Optimization

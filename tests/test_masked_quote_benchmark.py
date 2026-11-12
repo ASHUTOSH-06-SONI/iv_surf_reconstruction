@@ -65,3 +65,31 @@ def test_repository_pinn_trains_on_masked_surface_shapes():
 
     assert predictions.shape == values.shape
     assert torch.all(predictions > 0)
+
+
+def test_pinn_trains_with_parity_and_curvature_penalties():
+    from src.models.surface_physics import SurfaceGeometry
+
+    strikes = np.array([90.0, 100.0, 110.0, 90.0, 100.0, 110.0])
+    call_side = np.array([True, True, True, False, False, False])
+    rng = np.random.default_rng(0)
+    values = 0.2 + 0.01 * rng.random((8, 6))
+    masks = rng.random((8, 6)) < 0.5
+    coordinates = np.zeros((8, 2))
+    geometry = SurfaceGeometry.from_columns(strikes, call_side)
+
+    model = _fit_pinn(
+        values, coordinates, masks, epochs=2, seed=1,
+        parity_weight=1.0, curvature_weight=1.0, curvature_mode="convex", geometry=geometry,
+    )
+    inputs = _mlp_inputs(values, masks, coordinates).astype(np.float32)
+    assert torch.isfinite(model(torch.from_numpy(inputs))).all()
+
+
+def test_pinn_penalty_without_geometry_is_rejected():
+    import pytest
+
+    values = np.full((2, 4), 0.2)
+    masks = np.array([[True, False, True, False]] * 2)
+    with pytest.raises(ValueError):
+        _fit_pinn(values, np.zeros((2, 4)), masks, epochs=1, seed=0, parity_weight=1.0)

@@ -125,7 +125,6 @@ class PINNModel(nn.Module):
 
 def physics_penalty(pred_sigma: torch.Tensor, iv_min: float = 0.0, iv_max: float = 3.0) -> torch.Tensor:
     """Compute physics constraint penalty for IV predictions.
-    
     Penalizes predictions that violate financial constraints:
     - IV < iv_min (typically 0, negative volatility is unphysical)
     - IV > iv_max (typically 3.0 for NIFTY50 options)
