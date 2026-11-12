@@ -135,6 +135,7 @@ Thumbs.db
 
 # Data and models (keep processed data, exclude raw and models)
 data/raw/
+data/processed/deribit/eth_iv_surfaces.csv
 /models/
 *.pt
 *.pth

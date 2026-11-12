@@ -52,6 +52,102 @@ are unavailable. Some are sparse or have heavy tails, and feature distributions
 can differ between train and test. Do not assume that an extreme value is
 erroneous solely because it is large.
 
+## Collecting live Deribit ETH option data
+
+The uploaded Deribit ETH volatility OHLC file is an index time series, not an
+option chain. To build data suitable for surface reconstruction, this project
+includes a public, read-only WebSocket collector. It loads current option
+metadata using Deribit's `public/get_instruments` method and listens to the
+[`markprice.options.eth_usd` channel](https://docs.deribit.com/subscriptions/market-data/markpriceoptionsindex_name.md).
+The stream provides option mark price and IV; it does not provide bid/ask IV
+or a complete quote book.
+
+Install dependencies and run from the repository root:
+
+```bash
+pip install -e .
+python -m src.data.deribit_collector \
+  --snapshot-interval 60 \
+  --duration 3600 \
+  --output data/raw/deribit/eth_option_snapshots.csv
+```
+
+Each snapshot writes one row per listed option, with its instrument, expiry,
+strike, call/put type, latest streamed mark price and IV, quote timestamp,
+snapshot timestamp, and chain coverage. Since the WebSocket sends updates
+asynchronously, a snapshot combines the latest update seen for each option;
+`quote_timestamp_ms` lets you check how fresh each value is. The `mark_iv`
+column preserves Deribit's raw `iv` value. The documented channel example
+uses `iv: 0.9`, consistent with decimal volatility (90%); confirm units before
+combining it with other IV datasets. A non-null IV counts toward `coverage`
+even when its last update is older than the snapshot time, so coverage is not
+a quote-freshness metric.
+
+The output is under `data/raw/`, which is ignored by Git. The collector uses
+public endpoints only and does not place orders or require API credentials.
+It collects live data from startup; it does not backfill historical option
+surfaces. Restart it periodically to refresh the listed instrument metadata
+as expiries and new contracts change.
+
+Reshape the collected chain into paired call/put strike rows:
+
+```bash
+python -m src.data.reshape_deribit_surfaces \
+  --input data/raw/deribit/eth_option_snapshots.csv \
+  --output data/processed/deribit/eth_iv_surfaces.csv
+```
+
+The output contains one row per snapshot, expiry, and strike, with call/put IVs
+and mark prices plus quote timestamps and quote ages. It retains all quotes,
+including stale ones, so age-based filtering can be evaluated explicitly.
+This initial collection spans only about 20 minutes (20 snapshots); it is for
+pipeline and visualization checks, not a defensible training/holdout
+experiment. The feed also does not currently record the ETH index/forward
+price needed for log-moneyness coordinates. Collect for a longer period and
+add a synchronized underlying/index price before fitting a model across
+surfaces.
+
+### Initial PINN training demo
+
+To see an end-to-end reconstruction before changing the model, run:
+
+```bash
+python -m src.evaluate.deribit_pinn_demo \
+  --input data/processed/deribit/eth_iv_surfaces.csv \
+  --epochs 100 \
+  --output results/deribit_pinn_demo.csv
+```
+
+This masks half the observed quotes, trains the existing range-penalized PINN
+on the first 70% of timestamps, and reports performance on later validation
+and holdout timestamps alongside independent and pooled interpolation
+baselines. It saves summary metrics, held-out quote predictions, and a
+reconstruction plot under `results/`. The demo uses normalized log-strike
+coordinates because this capture lacks a synchronized ETH index/forward
+price; these are not true log-moneyness coordinates.
+
+Interpret results only as a **pipeline smoke test**: this capture has 20
+timestamps (about 20 minutes), and consecutive surfaces reuse many stale mark
+IVs. It is too short and dependent to establish temporal generalization or
+support model selection. Use the per-quote age fields and prediction output
+to inspect what the model saw and which targets it reconstructed.
+
+On the current capture, the 14/3/3 timestamp split produced 168 training, 36
+validation, and 36 holdout surfaces. With seed 42 and 50% masked quotes, the
+holdout results were:
+
+| Method | MAE | RMSE | R² | Hidden quotes |
+|---|---:|---:|---:|---:|
+| Linear interpolation | 0.01373 | 0.03898 | 0.95119 | 1,110 |
+| Merged interpolation | **0.00421** | **0.01435** | **0.99339** | 1,110 |
+| PINN | 0.01672 | 0.02232 | 0.98400 | 1,110 |
+
+The PINN trained, but pooled call/put interpolation was substantially more
+accurate on this holdout. The held-out quotes had a median age of 9.88 seconds;
+855 of 1,110 were no more than 60 seconds old. These scores remain a
+short-window demonstration, not evidence that interpolation or the PINN will
+generalize to longer periods or other market conditions.
+
 ## Current masked-quote benchmark
 
 Run from the repository root:
